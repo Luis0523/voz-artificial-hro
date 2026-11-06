@@ -1,0 +1,74 @@
+# =============================================================================
+# Kokoro-FastAPI — listo para desplegar en un servidor (NO se levanta solo)
+# =============================================================================
+# - Imagen fijada por digest: aunque GHCR actualice "latest", aquí no cambia.
+# - Los pesos del modelo (313 MB) y las voces van DENTRO de la imagen:
+#   no necesita internet para funcionar.
+# - Para arrancar:  docker compose up -d
+# - Para parar:     docker compose down
+# =============================================================================
+
+name: kokoro-tts
+
+services:
+  kokoro:
+    image: ${KOKORO_IMAGE:-ghcr.io/remsky/kokoro-fastapi-cpu@sha256:cbcc28802fb5d1eaaba8b91e38b0e872a669e85831c513cf6a29c709cbe25405}
+    container_name: kokoro-tts
+    restart: unless-stopped
+
+    ports:
+      # host:contenedor
+      # Si SOLO lo consumen otros servicios de este mismo servidor, usa:
+      #   - "127.0.0.1:${KOKORO_PORT:-8880}:8880"
+      # Si debe ser accesible desde la LAN, deja 0.0.0.0 (valor por defecto):
+      - "${KOKORO_PORT:-8880}:8880"
+
+    environment:
+      - API_LOG_LEVEL=${API_LOG_LEVEL:-INFO}
+      - DOWNLOAD_MODEL=false   # los pesos ya están en la imagen; no descargar
+      - HF_HUB_OFFLINE=1       # cero llamadas a Hugging Face al arrancar
+
+    # =========================================================================
+    # >>>  LÍMITES DE CPU Y RAM: EDITA ESTA SECCIÓN  <<<
+    # =========================================================================
+    # Referencia para Kokoro-82M en CPU (anuncios cortos):
+    #   2 CPU / 2 GB  -> mínimo razonable, ~2-4 s por anuncio
+    #   4 CPU / 4 GB  -> recomendado si hay varias peticiones a la vez
+    #   8 CPU / 8 GB  -> holgado, más concurrencia
+    #
+    # "cpus" admite decimales ("1.5") o rango ("0.5-2.0").
+    # "memory" admite b/k/m/g (ej. "2g", "512m").
+    # Los valores reales se toman de deploy/.env (hay un .env.example).
+    #
+    # NOTA: `deploy.resources` lo aplica `docker compose up` con Compose v2.
+    # Si tu servidor usa una versión antigua, mira la alternativa comentada
+    # justo debajo de este bloque.
+    deploy:
+      resources:
+        limits:
+          cpus: "${KOKORO_CPUS:-2.0}"               # <-- MÁXIMO de CPU
+          memory: "${KOKORO_MEM_LIMIT:-4g}"         # <-- MÁXIMO de RAM
+        reservations:
+          cpus: "${KOKORO_CPUS_RESERVE:-1.0}"       # <-- CPU garantizada
+          memory: "${KOKORO_MEM_RESERVE:-2g}"       # <-- RAM garantizada
+
+    # --- Alternativa para Compose antiguo (sin `deploy`) ---
+    # Descomenta estas 3 líneas y elimina el bloque `deploy:` de arriba:
+    # cpus: "2.0"              # máximo de CPU
+    # mem_limit: "4g"          # máximo de RAM
+    # mem_reservation: "2g"    # RAM garantizada
+    # =========================================================================
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8880/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s   # margen para que cargue el modelo al arrancar
+
+    # Evita que los logs llenen el disco del servidor
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
